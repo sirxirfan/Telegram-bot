@@ -1,14 +1,11 @@
-import telebot
+Import telebot
 import threading
-from flask import Flask, request
 from telebot import types
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "8068960429:AAFZRUj-SD1RWlNjW9pFpmGIyMf2qYwizqU"
 OWNER_ID = "6405915792"
-WEBHOOK_URL = "https://telegram-bot-2-fw0x.onrender.com/" # Apne Render ka URL yahan check kar lena
-bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 DB_FILE = "users.txt"
 
 # --- DATABASE ---
@@ -24,63 +21,76 @@ def save_user(user_id):
         if str(user_id) not in f.read().splitlines():
             f.write(str(user_id) + "\n")
 
-# --- ADMIN FUNCTIONS ---
+# --- FAST BROADCAST ---
+def send_msg(user, text):
+    try: bot.send_message(user, f"📢 *Notification:*\n\n{text}", parse_mode="Markdown")
+    except: pass
+
 def perform_broadcast(text):
     users = get_users()
     for u in users:
-        try: bot.send_message(u, f"📢 *Notification:*\n\n{text}", parse_mode="Markdown")
-        except: pass
+        threading.Thread(target=send_msg, args=(u, text)).start()
 
-# --- HANDLERS ---
+# --- KEYBOARDS ---
+def get_user_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    kb.add("🔄 Reset")
+    return kb
+
+def get_admin_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add("🔄 Reset", "📊 Dashboard", "📢 Broadcast", "📁 Users List")
+    return kb
+
+# --- COMMANDS ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    save_user(message.chat.id)
+    user_id = message.chat.id
+    save_user(user_id)
+    
+    # Inline button for Channel
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/irfanplugs"))
     
-    if str(message.chat.id) == OWNER_ID:
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-        kb.add("🔄 Reset", "📊 Dashboard", "📢 Broadcast", "📁 Users List")
-        bot.send_message(message.chat.id, "👑 *Admin Panel Ready*", reply_markup=kb, parse_mode="Markdown")
+    if str(user_id) == OWNER_ID:
+        # Admin Panel Menu
+        bot.send_message(user_id, "👑 *Admin Panel Ready*", reply_markup=get_admin_kb(), parse_mode="Markdown")
     else:
-        bot.send_message(message.chat.id, f"👋 *Welcome, {message.from_user.first_name}!*", reply_markup=markup, parse_mode="Markdown")
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        kb.add("🔄 Reset")
-        bot.send_message(message.chat.id, "Use button below:", reply_markup=kb)
+        # Welcome message + Attached Button
+        welcome_text = f"👋 *Welcome, {message.from_user.first_name}!*\n\nYou can join our channel for updates."
+        bot.send_message(user_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(user_id, "Use the '🔄 Reset' button below.", reply_markup=get_user_kb())
 
 @bot.message_handler(func=lambda m: m.text == "📊 Dashboard" and str(m.chat.id) == OWNER_ID)
 def dashboard(m):
-    bot.reply_to(m, f"📊 *Total Users:* `{len(get_users())}`", parse_mode="Markdown")
+    users = get_users()
+    bot.reply_to(m, f"📊 *Live Analytics*\n\n👥 Total Users: `{len(users)}`", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📁 Users List" and str(m.chat.id) == OWNER_ID)
 def show_list(m):
     users = get_users()
-    bot.reply_to(m, f"📁 *Users:* \n\n{chr(10).join([f'`{u}`' for u in users])}", parse_mode="Markdown")
+    if not users: bot.reply_to(m, "📂 No users found.")
+    else:
+        user_list = "\n".join([f"`{u}`" for u in users])
+        bot.reply_to(m, f"📁 *Registered Users:*\n\n{user_list}", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📢 Broadcast" and str(m.chat.id) == OWNER_ID)
 def ask_broadcast(m):
-    msg = bot.reply_to(m, "📩 *Enter message:*")
-    bot.register_next_step_handler(msg, lambda next_m: [perform_broadcast(next_m.text), bot.reply_to(next_m, "✅ *Done!*")])
+    msg = bot.reply_to(m, "📩 *Enter broadcast message:*")
+    bot.register_next_step_handler(msg, lambda next_m: [perform_broadcast(next_m.text), bot.reply_to(next_m, "✅ *Broadcast Completed!*")])
 
 @bot.message_handler(func=lambda m: m.text == "🔄 Reset")
 def reset_ui(m):
-    msg = bot.reply_to(m, "📧 *Enter Username:*")
-    bot.register_next_step_handler(msg, lambda n: bot.reply_to(n, "✅ *Reset link sent to your email!*", parse_mode="Markdown"))
+    msg = bot.reply_to(m, "📧 *Enter Username or Email*")
+    bot.register_next_step_handler(msg, lambda next_m: bot.reply_to(next_m, "✅ *Reset link sent successfully!*", parse_mode="Markdown"))
 
-# --- WEBHOOK SETUP ---
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def get_message():
-    json_str = request.get_data().decode('UTF-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return "!", 200
-
-@app.route("/")
-def home():
-    return "Bot is alive!", 200
-
-if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL + BOT_TOKEN)
-    app.run(host="0.0.0.0", port=8080)
-    
+# Sabse neeche ka code ye kar do:
+print("🚀 Bot is running fast...")
+while True:
+    try:
+        bot.infinity_polling(skip_pending=True)
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        import time
+        time.sleep(5) # 5 second wait karke restart hoga
+        
